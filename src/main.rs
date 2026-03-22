@@ -1,3 +1,5 @@
+#[cfg(all(test, not(feature = "nvml")))]
+use crate::gpu::fallback::{parse_get_counter_json, parse_nvidia_smi_output};
 use clap::Parser;
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -6,17 +8,15 @@ use crossterm::{
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal as RatTerminal;
-#[cfg(all(test, not(feature = "nvml")))]
-use crate::gpu::fallback::{parse_nvidia_smi_output, parse_get_counter_json};
 
-use std::io;
-use std::collections::HashMap;
-use std::time::Duration;
-use std::thread;
 use log::info;
-mod ui;
-mod metrics;
+use std::collections::HashMap;
+use std::io;
+use std::thread;
+use std::time::Duration;
 mod gpu;
+mod metrics;
+mod ui;
 use crate::metrics::Metrics;
 
 #[derive(Parser, Debug)]
@@ -39,8 +39,6 @@ fn parse_cim_json(s: &str) -> Option<String> {
     }
     None
 }
-
-
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pargs = Args::parse();
@@ -82,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mem_ratio = metrics.memory_ratio();
 
         // GPU sample (optional)
-        let mut gpu_info: Option<(u32,u32,String)> = None;
+        let mut gpu_info: Option<(u32, u32, String)> = None;
         #[cfg(feature = "nvml")]
         {
             if let Some(s) = crate::gpu::nvml_impl::query_first() {
@@ -93,9 +91,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(not(feature = "nvml"))]
         {
             match crate::gpu::fallback::query_gpu_fallback() {
-                Ok(Some((u,t,name))) => { gpu_info = Some((u,t,name)); last_gpu_error = None; }
+                Ok(Some((u, t, name))) => {
+                    gpu_info = Some((u, t, name));
+                    last_gpu_error = None;
+                }
                 Ok(None) => { /* no GPU info available */ }
-                Err(e) => { last_gpu_error = Some(e); }
+                Err(e) => {
+                    last_gpu_error = Some(e);
+                }
             }
         }
 
@@ -130,7 +133,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             SortBy::Name => "Name",
             SortBy::Pid => "PID",
         };
-        ui::draw_ui(&mut terminal, cpu, mem_ratio, &proc_list, selected, sort_label, &last_gpu_error, &confirming_kill, &gpu_info)?;
+        ui::draw_ui(
+            &mut terminal,
+            cpu,
+            mem_ratio,
+            &proc_list,
+            selected,
+            sort_label,
+            &last_gpu_error,
+            &confirming_kill,
+            &gpu_info,
+        )?;
 
         // update previous cpu readings (only when not paused)
         if !paused {

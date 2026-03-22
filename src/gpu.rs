@@ -1,16 +1,22 @@
 #[cfg(feature = "nvml")]
 pub mod nvml_impl {
-    use nvml_wrapper::Nvml;
     use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
+    use nvml_wrapper::Nvml;
 
-    pub struct GpuSample { pub utilization: u32, pub temperature: u32 }
+    pub struct GpuSample {
+        pub utilization: u32,
+        pub temperature: u32,
+    }
 
     pub fn query_first() -> Option<GpuSample> {
         let nvml = Nvml::init().ok()?;
         let device = nvml.device_by_index(0).ok()?;
         let util = device.utilization_rates().ok()?.gpu;
         let temp = device.temperature(TemperatureSensor::Gpu).ok()?;
-        Some(GpuSample { utilization: util, temperature: temp })
+        Some(GpuSample {
+            utilization: util,
+            temperature: temp,
+        })
     }
 }
 
@@ -56,9 +62,12 @@ pub mod fallback {
         None
     }
 
-    pub fn query_gpu_fallback() -> Result<Option<(u32,u32,String)>, String> {
+    pub fn query_gpu_fallback() -> Result<Option<(u32, u32, String)>, String> {
         if let Ok(output) = std::process::Command::new("nvidia-smi")
-            .args(["--query-gpu=utilization.gpu,temperature.gpu", "--format=csv,noheader,nounits"])
+            .args([
+                "--query-gpu=utilization.gpu,temperature.gpu",
+                "--format=csv,noheader,nounits",
+            ])
             .output()
         {
             if output.status.success() {
