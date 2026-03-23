@@ -5,11 +5,12 @@ use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Row, Table};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::Stdout;
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw_ui(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     cpu: f32,
     mem_ratio: f64,
-    proc_list: &Vec<ProcEntry>,
+    proc_list: &[ProcEntry],
     selected: usize,
     sort_label: &str,
     last_gpu_error: &Option<String>,
@@ -144,5 +145,5 @@ pub fn draw_ui(
             }
         })
         .map(|_| ())
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        .map_err(|e| std::io::Error::other(e))
 }
