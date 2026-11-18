@@ -18,6 +18,15 @@ impl Metrics {
         self.sys.refresh_all();
     }
 
+    /// CPU usage of every process as of the last refresh, keyed by PID.
+    pub fn proc_cpu(&self) -> HashMap<Pid, f32> {
+        self.sys
+            .processes()
+            .iter()
+            .map(|(pid, process)| (*pid, process.cpu_usage()))
+            .collect()
+    }
+
     pub fn cpu_avg(&self) -> f32 {
         if self.sys.cpus().is_empty() {
             return 0.0;

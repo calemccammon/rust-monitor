@@ -1,7 +1,7 @@
 use crate::metrics::ProcEntry;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Row, Table, TableState};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::Stdout;
 
@@ -13,7 +13,7 @@ pub fn draw_ui(
     proc_list: &[ProcEntry],
     selected: usize,
     sort_label: &str,
-    last_gpu_error: &Option<String>,
+    status: &Option<String>,
     confirming_kill: &Option<sysinfo::Pid>,
     gpu_info: &Option<(u32, u32, String)>,
 ) -> std::io::Result<()> {
@@ -28,6 +28,7 @@ pub fn draw_ui(
                         Constraint::Length(3),
                         Constraint::Length(3),
                         Constraint::Min(1),
+                        Constraint::Length(3),
                     ]
                     .as_ref(),
                 )
@@ -55,18 +56,6 @@ pub fn draw_ui(
                     .block(Block::default().title(title).borders(Borders::ALL))
                     .ratio(ratio);
                 f.render_widget(gpu_g, chunks[2]);
-            } else if let Some(err) = last_gpu_error {
-                let first_line = err.lines().next().unwrap_or("");
-                let short = if first_line.len() > 40 {
-                    format!("{}...", &first_line[..37])
-                } else {
-                    first_line.to_string()
-                };
-                let title = format!("GPU Error: {}", short);
-                let gpu_g = Gauge::default()
-                    .block(Block::default().title(title).borders(Borders::ALL))
-                    .ratio(0.0);
-                f.render_widget(gpu_g, chunks[2]);
             } else {
                 let gpu_g = Gauge::default()
                     .block(Block::default().title("GPU: N/A").borders(Borders::ALL))
@@ -78,7 +67,8 @@ pub fn draw_ui(
             for (i, (pid, name, cpu, delta, mem)) in proc_list.iter().enumerate() {
                 let cpu_text = format!("{:.2}", cpu);
                 let delta_text = format!("{:+.2}", delta);
-                let mem_text = format!("{} KB", mem);
+                // sysinfo reports process memory in bytes
+                let mem_text = format!("{} KB", *mem / 1024);
                 let row = Row::new(vec![
                     pid.to_string(),
                     name.clone(),
@@ -110,27 +100,20 @@ pub fn draw_ui(
                     Constraint::Length(8),
                     Constraint::Length(12),
                 ]);
-            f.render_widget(table, chunks[3]);
+            // The state only carries the selection, so the table scrolls to keep it in view.
+            let mut table_state = TableState::default();
+            table_state.select(Some(selected));
+            f.render_stateful_widget(table, chunks[3], &mut table_state);
 
             let mut help_text =
                 "q:quit  p:pause  s:cycle sort  ↑/↓:select  k:kill (confirm)".to_string();
-            if let Some(err) = last_gpu_error {
-                let first_line = err.lines().next().unwrap_or("");
-                let short = if first_line.len() > 60 {
-                    format!("{}...", &first_line[..57])
-                } else {
-                    first_line.to_string()
-                };
-                help_text.push_str("    GPU Err: ");
-                help_text.push_str(&short);
+            if let Some(msg) = status {
+                help_text.push_str("    ");
+                help_text.push_str(msg);
             }
             let help = Paragraph::new(help_text)
                 .block(Block::default().borders(Borders::ALL).title("Keys"));
-            let footer_area = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(1), Constraint::Length(3)])
-                .split(chunks[3])[1];
-            f.render_widget(help, footer_area);
+            f.render_widget(help, chunks[4]);
 
             if let Some(kpid) = confirming_kill {
                 let confirm = Paragraph::new(format!("Confirm kill PID {}? (y/n)", kpid))

@@ -1,8 +1,8 @@
 #[cfg(all(test, not(feature = "nvml")))]
-use crate::gpu::fallback::{parse_get_counter_json, parse_nvidia_smi_output};
+use crate::gpu::fallback::{parse_cim_json, parse_get_counter_json, parse_nvidia_smi_output};
 use clap::Parser;
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -12,8 +12,7 @@ use ratatui::Terminal as RatTerminal;
 use log::info;
 use std::collections::HashMap;
 use std::io;
-use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 mod gpu;
 mod metrics;
 mod ui;
@@ -29,17 +28,6 @@ struct Args {
     interval: u64,
 }
 
-#[allow(dead_code)]
-#[cfg(not(feature = "nvml"))]
-fn parse_cim_json(s: &str) -> Option<String> {
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
-        if let Some(name) = v.get("Name").and_then(|n| n.as_str()) {
-            return Some(name.to_string());
-        }
-    }
-    None
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pargs = Args::parse();
 
@@ -49,13 +37,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = RatTerminal::new(backend)?;
 
+    let result = run(&mut terminal, pargs);
+
+    // Restore the terminal whether the loop ended with `q` or with an error.
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = terminal.show_cursor();
+
+    result
+}
+
+fn run(
+    terminal: &mut RatTerminal<CrosstermBackend<io::Stdout>>,
+    pargs: Args,
+) -> Result<(), Box<dyn std::error::Error>> {
     let target = pargs.process.map(|s| s.to_lowercase());
+    let interval = Duration::from_millis(pargs.interval.max(100));
 
     env_logger::init();
     info!("starting rust-monitor");
 
     let mut metrics = Metrics::new();
     let mut prev_proc_cpu: HashMap<sysinfo::Pid, f32> = HashMap::new();
+    let mut gpu_info: Option<(u32, u32, String)> = None;
+    let mut next_refresh = Instant::now();
     let mut paused = false;
     let mut selected: usize = 0;
     #[derive(PartialEq, Eq)]
@@ -68,39 +73,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut sort_by = SortBy::Cpu;
     let mut confirming_kill: Option<sysinfo::Pid> = None;
-    let mut last_gpu_error: Option<String> = None;
+    let mut status: Option<String> = None;
 
     loop {
-        if !paused {
-            metrics.refresh();
+        // Sample once per interval. A key press redraws without sampling again.
+        let now = Instant::now();
+        if now >= next_refresh {
+            if !paused {
+                prev_proc_cpu = metrics.proc_cpu();
+                metrics.refresh();
+            }
+
+            // GPU sample (optional)
+            #[cfg(feature = "nvml")]
+            {
+                let sample = crate::gpu::nvml_impl::query_first();
+                gpu_info = sample.map(|s| (s.utilization, s.temperature, "NVML".to_string()));
+            }
+            #[cfg(not(feature = "nvml"))]
+            {
+                gpu_info = crate::gpu::fallback::query_gpu_fallback();
+            }
+
+            next_refresh = now + interval;
         }
 
         // CPU usage and memory ratio
         let cpu = metrics.cpu_avg();
         let mem_ratio = metrics.memory_ratio();
-
-        // GPU sample (optional)
-        let mut gpu_info: Option<(u32, u32, String)> = None;
-        #[cfg(feature = "nvml")]
-        {
-            if let Some(s) = crate::gpu::nvml_impl::query_first() {
-                gpu_info = Some((s.utilization, s.temperature, "NVML".to_string()));
-                last_gpu_error = None;
-            }
-        }
-        #[cfg(not(feature = "nvml"))]
-        {
-            match crate::gpu::fallback::query_gpu_fallback() {
-                Ok(Some((u, t, name))) => {
-                    gpu_info = Some((u, t, name));
-                    last_gpu_error = None;
-                }
-                Ok(None) => { /* no GPU info available */ }
-                Err(e) => {
-                    last_gpu_error = Some(e);
-                }
-            }
-        }
 
         // Collect processes
         let mut proc_list = metrics.collect_procs(&prev_proc_cpu, pargs.pid, &target);
@@ -113,9 +113,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             SortBy::Delta => {
                 proc_list.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal))
             }
-            SortBy::Mem => proc_list.sort_by(|a, b| b.4.cmp(&a.4)),
+            SortBy::Mem => proc_list.sort_by_key(|a| std::cmp::Reverse(a.4)),
             SortBy::Name => proc_list.sort_by(|a, b| a.1.cmp(&b.1)),
-            SortBy::Pid => proc_list.sort_by(|a, b| a.0.cmp(&b.0)),
+            SortBy::Pid => proc_list.sort_by_key(|a| a.0),
         }
 
         // Ensure selected index is within bounds
@@ -134,27 +134,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             SortBy::Pid => "PID",
         };
         ui::draw_ui(
-            &mut terminal,
+            terminal,
             cpu,
             mem_ratio,
             &proc_list,
             selected,
             sort_label,
-            &last_gpu_error,
+            &status,
             &confirming_kill,
             &gpu_info,
         )?;
 
-        // update previous cpu readings (only when not paused)
-        if !paused {
-            for (pid, _name, cpu, _delta, _mem) in proc_list.iter() {
-                prev_proc_cpu.insert(*pid, *cpu);
-            }
-        }
-
-        // Handle input (interactive keys)
-        if event::poll(Duration::from_millis(100))? {
+        // Handle input (interactive keys), waiting until the next sample is due
+        let timeout = next_refresh.saturating_duration_since(Instant::now());
+        if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
+                // Windows reports key releases as well as presses.
+                if key.kind == KeyEventKind::Release {
+                    continue;
+                }
                 match key.code {
                     KeyCode::Char('q') => break,
                     KeyCode::Char('p') => {
@@ -184,15 +182,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     KeyCode::Char('k') => {
                         // prepare kill confirmation for selected process (by index)
                         if !proc_list.is_empty() {
+                            status = None;
                             confirming_kill = Some(proc_list[selected].0);
                         }
                     }
                     KeyCode::Char('y') => {
-                        if let Some(kpid) = confirming_kill {
-                            if let Some(proc_ref) = metrics.sys.process(kpid) {
-                                let _ = proc_ref.kill();
-                            }
-                            confirming_kill = None;
+                        if let Some(kpid) = confirming_kill.take() {
+                            let killed = metrics.sys.process(kpid).is_some_and(|p| p.kill());
+                            let msg = if killed {
+                                format!("Sent kill signal to PID {kpid}")
+                            } else {
+                                format!("Could not kill PID {kpid}")
+                            };
+                            status = Some(msg);
                         }
                     }
                     KeyCode::Char('n') => {
@@ -202,13 +204,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-
-        thread::sleep(Duration::from_millis(pargs.interval));
     }
-
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
 
     Ok(())
 }
@@ -225,6 +221,12 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_nvidia_smi_output_rejects_non_numeric() {
+        assert_eq!(parse_nvidia_smi_output("[N/A], [N/A]\n"), None);
+        assert_eq!(parse_nvidia_smi_output(""), None);
+    }
+
+    #[test]
     fn test_parse_get_counter_json() {
         let json = r#"[
             {"CookedValue": 10.0},
@@ -235,9 +237,21 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_get_counter_json_without_samples() {
+        assert_eq!(parse_get_counter_json("[]"), None);
+        assert_eq!(parse_get_counter_json("not json"), None);
+    }
+
+    #[test]
     fn test_parse_cim_json() {
         let json = r#"{"Name":"Test GPU","Other":"x"}"#;
         let res = parse_cim_json(json);
         assert_eq!(res, Some("Test GPU".to_string()));
+    }
+
+    #[test]
+    fn test_parse_cim_json_without_name() {
+        assert_eq!(parse_cim_json(r#"{"Other":"x"}"#), None);
+        assert_eq!(parse_cim_json("not json"), None);
     }
 }
