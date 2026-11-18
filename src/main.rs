@@ -113,9 +113,9 @@ fn run(
             SortBy::Delta => {
                 proc_list.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal))
             }
-            SortBy::Mem => proc_list.sort_by(|a, b| b.4.cmp(&a.4)),
+            SortBy::Mem => proc_list.sort_by_key(|a| std::cmp::Reverse(a.4)),
             SortBy::Name => proc_list.sort_by(|a, b| a.1.cmp(&b.1)),
-            SortBy::Pid => proc_list.sort_by(|a, b| a.0.cmp(&b.0)),
+            SortBy::Pid => proc_list.sort_by_key(|a| a.0),
         }
 
         // Ensure selected index is within bounds
