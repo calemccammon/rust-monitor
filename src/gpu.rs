@@ -21,7 +21,6 @@ pub mod nvml_impl {
 }
 
 #[cfg(not(feature = "nvml"))]
-#[allow(dead_code)]
 pub mod fallback {
     pub fn parse_nvidia_smi_output(s: &str) -> Option<(u32, u32)> {
         let line = s.lines().next().unwrap_or("");
@@ -62,7 +61,9 @@ pub mod fallback {
         None
     }
 
-    pub fn query_gpu_fallback() -> Result<Option<(u32, u32, String)>, String> {
+    /// Returns (utilization %, temperature °C, source name), or `None` when no source answers.
+    /// A temperature of 0 means the source does not report one.
+    pub fn query_gpu_fallback() -> Option<(u32, u32, String)> {
         if let Ok(output) = std::process::Command::new("nvidia-smi")
             .args([
                 "--query-gpu=utilization.gpu,temperature.gpu",
@@ -73,7 +74,7 @@ pub mod fallback {
             if output.status.success() {
                 if let Ok(s) = String::from_utf8(output.stdout) {
                     if let Some((u, t)) = parse_nvidia_smi_output(&s) {
-                        return Ok(Some((u, t, "NVIDIA (nvidia-smi)".to_string())));
+                        return Some((u, t, "NVIDIA (nvidia-smi)".to_string()));
                     }
                 }
             }
@@ -110,12 +111,12 @@ pub mod fallback {
                                     }
                                 }
                             }
-                            return Ok(Some((avg as u32, 0u32, gname)));
+                            return Some((avg as u32, 0u32, gname));
                         }
                     }
                 }
             }
         }
-        Ok(None)
+        None
     }
 }

@@ -34,7 +34,7 @@ CLI flags:
 | --- | --- |
 | `-n, --process <NAME>` | filter processes by name (case-insensitive substring) |
 | `-p, --pid <PID>` | show only the given PID |
-| `-i, --interval <MS>` | refresh interval in milliseconds (default: 1000) |
+| `-i, --interval <MS>` | refresh interval in milliseconds (default: 1000, minimum: 100) |
 
 Keys:
 
@@ -44,7 +44,7 @@ Keys:
 | `p` | pause or resume refreshing |
 | `s` | cycle the sort column: CPU, ΔCPU, Mem, Name, PID |
 | Up / Down | move the selection |
-| `k` | ask to kill the selected process, then `y` to confirm or `n` to cancel |
+| `k` | ask to kill the selected process, then `y` to confirm or `n` to cancel. The Keys box reports whether the kill signal was sent |
 
 ## GPU support
 
@@ -54,18 +54,16 @@ Keys:
 
 ## Code layout
 
-- `src/main.rs`: argument parsing, the refresh and input loop, sorting
+- `src/main.rs`: argument parsing, terminal setup and restore, the refresh and input loop, sorting
 - `src/metrics.rs`: `sysinfo` wrapper for CPU, memory and the process list
 - `src/gpu.rs`: NVML query and the `nvidia-smi` / PowerShell fallback
 - `src/ui.rs`: `ratatui` layout and widgets
 
 ## Testing
 
-`cargo test` runs three unit tests for the GPU output parsing helpers. CI in `.github/workflows/ci.yml` runs `cargo fmt --check`, `cargo clippy`, `cargo build` and `cargo test` on Ubuntu and Windows.
+`cargo test` runs six unit tests for the GPU output parsing helpers. CI in `.github/workflows/ci.yml` runs `cargo fmt --check`, `cargo clippy`, `cargo build` and `cargo test` on Ubuntu and Windows.
 
 ## Limitations
 
-- The loop sleeps for the refresh interval between input polls, so a key press can take up to one interval to register.
-- The process table does not scroll. Rows beyond the height of the terminal are not visible, even when selected.
-- The Mem column prints the byte count from `sysinfo` with a `KB` label.
-- The terminal is restored on a normal quit with `q`, but not if the program exits with an error.
+- GPU sampling starts `nvidia-smi` (and PowerShell on Windows) synchronously, so key presses are not handled while those commands run.
+- The terminal is restored when the program quits with `q` or returns an error, but not if it panics.
