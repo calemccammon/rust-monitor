@@ -61,7 +61,7 @@ Keys:
 
 ## Testing
 
-`cargo test` runs six unit tests for the GPU output parsing helpers. CI in `.github/workflows/ci.yml` runs `cargo fmt --check`, `cargo clippy`, `cargo build` and `cargo test` on Ubuntu and Windows.
+`cargo test` runs the unit tests for the GPU output parsing helpers. CI in `.github/workflows/ci.yml` runs `cargo fmt --check`, `cargo clippy`, `cargo build` and `cargo test` on Ubuntu and Windows.
 
 ## Limitations
 
